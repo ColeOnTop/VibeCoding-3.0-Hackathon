@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, jsonify, session, redirect, u
 import pymysql
 from dotenv import load_dotenv
 import os
-from openai import openai 
+from OpenAI import openai 
 import bcrypt
 import json
 import re
