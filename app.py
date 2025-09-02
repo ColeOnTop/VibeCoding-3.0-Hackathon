@@ -15,7 +15,7 @@ import traceback
 
 # Load environment variables
 load_dotenv()
-openai_api_key = os.getenv('OPENAI_API_KEY')
+openai.api_key = os.getenv('OPENAI_API_KEY')
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY')
