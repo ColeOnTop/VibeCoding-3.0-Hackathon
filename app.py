@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash
-import MySQLdb
+import pymysql 
+pymysql.install_as_MySQLdb()
 from dotenv import load_dotenv
 import os
 from openai import OpenAI
