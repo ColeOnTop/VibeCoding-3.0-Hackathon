@@ -1,8 +1,7 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash
-import pymysql
 from dotenv import load_dotenv
 import os
-from OpenAI import openai 
+from openai import OpenAI
 import bcrypt
 import json
 import re
@@ -12,30 +11,116 @@ import hmac
 import requests
 import json
 import traceback  
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 # Load environment variables
 load_dotenv()
-openai.api_key = os.getenv('OPENAI_API_KEY')
 
 app = Flask(__name__)
-app.secret_key = os.getenv('SECRET_KEY')
+app.secret_key = os.environ.get('SECRET_KEY', os.getenv('SECRET_KEY', 'fallback-secret-key'))
 
 # OpenRouter client configuration
-client = openai(
+client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=os.getenv('OPENROUTER_API_KEY')
 )
 
 # Database configuration - Updated to use PyMySQL
 def get_db_connection():
-    return pymysql.connect(
-        host=os.getenv('MYSQL_HOST'),
-        user=os.getenv('MYSQL_USER'),
-        password=os.getenv('MYSQL_PASSWORD'),
-        database=os.getenv('MYSQL_DB'),
-        charset='utf8mb4',
-        cursorclass=pymysql.cursors.DictCursor
+    return psycopg2.connect(
+        host=os.getenv('PGHOST'),
+        user=os.getenv('PGUSER'), 
+        password=os.getenv('PGPASSWORD'),
+        database=os.getenv('PGDATABASE'),
+        port=os.getenv('PGPORT', 5432),
+        cursor_factory=RealDictCursor
     )
+def setup_database():
+    conn = psycopg2.connect(
+        host=os.getenv('PGHOST'),
+        user=os.getenv('PGUSER'),
+        password=os.getenv('PGPASSWORD'),
+        database=os.getenv('PGDATABASE'),
+        port=os.getenv('PGPORT', 5432)
+    )
+    cursor = conn.cursor()
+    
+    # Create tables (adapt your MySQL schema)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            email VARCHAR(255) UNIQUE NOT NULL,
+            password VARCHAR(255) NOT NULL,
+            trial_end_date TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS subscription_plans (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            price DECIMAL(10,2) NOT NULL,
+            duration_days INTEGER NOT NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id),
+            plan_id INTEGER REFERENCES subscription_plans(id),
+            status VARCHAR(50) NOT NULL,
+            start_date TIMESTAMP,
+            end_date TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS payments (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id),
+            subscription_id INTEGER REFERENCES subscriptions(id),
+            plan_id INTEGER REFERENCES subscription_plans(id),
+            amount DECIMAL(10,2),
+            status VARCHAR(50),
+            payment_method VARCHAR(50),
+            transaction_id VARCHAR(255),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS recipes (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES users(id),
+            recipe_name VARCHAR(255) NOT NULL,
+            ingredients TEXT,
+            instructions TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    
+    # Insert default subscription plans
+    cursor.execute("""
+        INSERT INTO subscription_plans (name, price, duration_days) 
+        VALUES 
+        ('Monthly', 999.00, 30),
+        ('Yearly', 9999.00, 365)
+        ON CONFLICT DO NOTHING
+    """)
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+    print("Database setup complete!")
 
 
 def has_active_subscription(user_id):
@@ -205,7 +290,7 @@ def register():
             conn.commit()
             flash('Registration successful! Enjoy your 14-day free trial. Please log in.')
             return redirect(url_for('login'))
-        except pymysql.IntegrityError:
+        except psycopg2.IntegrityError:
             flash('Email already exists')
         finally:
             cursor.close()
@@ -1054,7 +1139,7 @@ def update_profile():
         
         return jsonify({'success': True, 'message': 'Profile updated successfully'})
         
-    except pymysql.IntegrityError:
+    except psycopg2.IntegrityError:
         return jsonify({'error': 'Email already exists'}), 400
     except Exception as e:
         return jsonify({'error': 'Failed to update profile'}), 500
@@ -1098,4 +1183,7 @@ def health_check():
         return jsonify({'status': 'unhealthy', 'database': 'disconnected', 'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    setup_database()
+    port = int(os.environ.get('PORT', 5000))
+    debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
+    app.run(host='0.0.0.0', port=port, debug=debug_mode)
