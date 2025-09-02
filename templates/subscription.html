@@ -15,7 +15,6 @@
                 <a href="{{ url_for('index') }}" class="logout-btn">Home</a>
                 <a href="{{ url_for('logout') }}" class="logout-btn">Logout</a>
             </div>
-            
         </div>
     </header>
 
@@ -39,10 +38,10 @@
                 {% if subscription.status == 'trial' and subscription.trial_end_date %}
                 <p>Trial ends: {{ subscription.trial_end_date.strftime('%Y-%m-%d') }}</p>
                 {% if subscription.trial_end_date and subscription.trial_end_date > now %}
-    <p>Days remaining: {{ (subscription.trial_end_date - now).days }}</p>
-{% else %}
-    <p>Trial expired</p>
-{% endif %}
+                    <p>Days remaining: {{ (subscription.trial_end_date - now).days }}</p>
+                {% else %}
+                    <p>Trial expired</p>
+                {% endif %}
                 {% endif %}
                 
                 {% if subscription.end_date %}
@@ -56,16 +55,14 @@
             </div>
             {% endif %}
 
-            
-
             <div class="subscription-plans">
                 <h3>Available Plans</h3>
                 <div class="plans-grid">
                     {% for plan in plans %}
                     <div class="plan-card">
-                        <h4>{{ plan[1] }}</h4>
-                        <div class="plan-price">${{ plan[2] }}</div>
-                        <div class="plan-duration">{{ plan[3] }} days</div>
+                        <h4>{{ plan.name }}</h4>
+                        <div class="plan-price">KES {{ plan.price }}</div>
+                        <div class="plan-duration">{{ plan.duration_days }} days</div>
                         <ul class="plan-features">
                             <li>Unlimited recipe recommendations</li>
                             <li>Save your favorite recipes</li>
@@ -74,7 +71,7 @@
                         {% if subscription and subscription.status == 'active' %}
                             <button class="primary-btn" disabled>Current Plan</button>
                         {% else %}
-                            <button type="button" class="primary-btn" data-plan-id="{{ plan[0] }}" onclick="createSubscription(this.dataset.planId)">
+                            <button type="button" class="primary-btn" data-plan-id="{{ plan.id }}" onclick="createSubscription(this.dataset.planId)">
                                 Select Plan
                             </button>
                         {% endif %}
@@ -82,41 +79,17 @@
                     {% endfor %}
                 </div>
             </div>
+
+            <!-- Add manual verification button for testing -->
+            <div class="manual-verification" style="margin-top: 2rem; padding: 1rem; border: 1px solid #ddd; border-radius: 8px;">
+                <h4>Payment Verification</h4>
+                <p>If you completed a payment but your subscription isn't active, click below to verify:</p>
+                <button type="button" class="secondary-btn" onclick="verifyPayment()">Verify Payment</button>
+            </div>
         </section>
     </main>
 
     <script>
-    // Test function to check basic connectivity
-    async function testConnection() {
-        console.log('Testing connection...');
-        try {
-            const response = await fetch('/test_subscription', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    plan_id: 1  // Test with plan ID 1
-                })
-            });
-
-            console.log('Test response status:', response.status);
-            
-            if (response.ok) {
-                const data = await response.json();
-                console.log('Test successful:', data);
-                alert('Connection test successful! Check console for details.');
-            } else {
-                const errorText = await response.text();
-                console.error('Test failed:', errorText);
-                alert('Connection test failed. Check console for details.');
-            }
-        } catch (error) {
-            console.error('Test connection error:', error);
-            alert('Connection test failed: ' + error.message);
-        }
-    }
-
     async function createSubscription(planId) {
         const button = event.target;
         const originalText = button.textContent;
@@ -142,7 +115,6 @@
             });
 
             console.log('Response status:', response.status);
-            console.log('Response headers:', response.headers);
 
             // Check if response is JSON
             const contentType = response.headers.get('content-type');
@@ -150,7 +122,7 @@
                 console.error('Response is not JSON:', contentType);
                 const text = await response.text();
                 console.error('Response text:', text);
-                throw new Error('Server returned non-JSON response: ' + text);
+                throw new Error('Server returned non-JSON response');
             }
 
             const data = await response.json();
@@ -193,54 +165,54 @@
     }
 
     function verifyPayment(checkoutId) {
-    if (!checkoutId) {
-        checkoutId = prompt("Please enter your checkout ID (from payment confirmation):");
-        if (!checkoutId) return;
-    }
-    
-    const button = event.target;
-    const originalText = button.innerHTML;
-    button.innerHTML = 'Verifying...';
-    button.disabled = true;
-    
-    fetch('/verify_payment', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-            checkout_id: checkoutId
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            alert(data.message);
-            window.location.reload();
-        } else {
-            alert('Verification failed: ' + data.message);
+        if (!checkoutId) {
+            checkoutId = prompt("Please enter your checkout ID (from payment confirmation):");
+            if (!checkoutId) return;
         }
-    })
-    .catch(error => {
-        console.error('Error:', error);
-        alert('Verification failed due to network error.');
-    })
-    .finally(() => {
-        button.innerHTML = originalText;
-        button.disabled = false;
-    });
-}
+        
+        const button = event.target;
+        const originalText = button.innerHTML;
+        button.innerHTML = 'Verifying...';
+        button.disabled = true;
+        
+        fetch('/verify_payment', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                checkout_id: checkoutId
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert(data.message);
+                window.location.reload();
+            } else {
+                alert('Verification failed: ' + data.message);
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Verification failed due to network error.');
+        })
+        .finally(() => {
+            button.innerHTML = originalText;
+            button.disabled = false;
+        });
+    }
 
-// Auto-verify if checkout_id is in URL (from callback)
-const urlParams = new URLSearchParams(window.location.search);
-const checkoutId = urlParams.get('checkout_id');
-if (checkoutId) {
-    console.log('Auto-verifying payment with checkout_id:', checkoutId);
-    // Add small delay to ensure page is loaded
-    setTimeout(() => {
-        verifyPayment(checkoutId);
-    }, 1000);
-}
+    // Auto-verify if checkout_id is in URL (from callback)
+    const urlParams = new URLSearchParams(window.location.search);
+    const checkoutId = urlParams.get('checkout_id');
+    if (checkoutId) {
+        console.log('Auto-verifying payment with checkout_id:', checkoutId);
+        // Add small delay to ensure page is loaded
+        setTimeout(() => {
+            verifyPayment(checkoutId);
+        }, 1000);
+    }
     </script>
 </body>
 </html>

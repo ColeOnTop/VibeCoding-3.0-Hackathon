@@ -1,6 +1,5 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash
-import pymysql 
-pymysql.install_as_MySQLdb()
+import pymysql
 from dotenv import load_dotenv
 import os
 from openai import OpenAI
@@ -14,7 +13,6 @@ import requests
 import json
 import traceback  
 
-
 # Load environment variables
 load_dotenv()
 
@@ -27,13 +25,15 @@ client = OpenAI(
     api_key=os.getenv('OPENROUTER_API_KEY')
 )
 
-# Database configuration
+# Database configuration - Updated to use PyMySQL
 def get_db_connection():
-    return MySQLdb.connect(
+    return pymysql.connect(
         host=os.getenv('MYSQL_HOST'),
         user=os.getenv('MYSQL_USER'),
-        passwd=os.getenv('MYSQL_PASSWORD'),
-        db=os.getenv('MYSQL_DB')
+        password=os.getenv('MYSQL_PASSWORD'),
+        database=os.getenv('MYSQL_DB'),
+        charset='utf8mb4',
+        cursorclass=pymysql.cursors.DictCursor
     )
 
 
@@ -46,8 +46,8 @@ def has_active_subscription(user_id):
     cursor.execute("SELECT trial_end_date FROM users WHERE id = %s", (user_id,))
     user = cursor.fetchone()
     
-    if user and user[0]:
-        trial_end = user[0]
+    if user and user['trial_end_date']:
+        trial_end = user['trial_end_date']
         now = datetime.now()
         
         # Handle timezone comparison
@@ -71,6 +71,7 @@ def has_active_subscription(user_id):
     conn.close()
     
     return subscription is not None
+
 def get_trial_status(trial_end_date):
     """Consistently calculate trial status across the app"""
     if not trial_end_date:
@@ -109,7 +110,7 @@ def index():
     # Get user trial info
     cursor.execute("SELECT trial_end_date FROM users WHERE id = %s", (session['user_id'],))
     user_data = cursor.fetchone()
-    trial_end_date = user_data[0] if user_data else None
+    trial_end_date = user_data['trial_end_date'] if user_data else None
     
     # Get latest subscription
     cursor.execute("""
@@ -129,9 +130,9 @@ def index():
     subscription_status = 'trial'  # Default to trial
     plan_name = 'Trial'
     
-    if subscription and subscription[0] == 'active' and subscription[1] > datetime.now():
+    if subscription and subscription['status'] == 'active' and subscription['end_date'] > datetime.now():
         subscription_status = 'active'
-        plan_name = subscription[2]
+        plan_name = subscription['name']
     elif trial_end_date and datetime.now() > trial_end_date:
         subscription_status = 'expired'
     
@@ -160,9 +161,9 @@ def login():
         cursor.close()
         conn.close()
         
-        if user and bcrypt.checkpw(password.encode('utf-8'), user[2].encode('utf-8')):
-            session['user_id'] = user[0]
-            session['user_name'] = user[1]
+        if user and bcrypt.checkpw(password.encode('utf-8'), user['password'].encode('utf-8')):
+            session['user_id'] = user['id']
+            session['user_name'] = user['name']
             return redirect(url_for('index'))
         else:
             flash('Invalid email or password')
@@ -191,17 +192,19 @@ def register():
             
             # Create a trial subscription
             cursor.execute("SELECT id FROM subscription_plans WHERE name = 'Monthly'")
-            plan_id = cursor.fetchone()[0]
+            plan = cursor.fetchone()
+            plan_id = plan['id'] if plan else None
             
-            cursor.execute("""
-                INSERT INTO subscriptions (user_id, plan_id, status, start_date, end_date)
-                VALUES (%s, %s, 'trial', NOW(), %s)
-            """, (user_id, plan_id, trial_end_date))
+            if plan_id:
+                cursor.execute("""
+                    INSERT INTO subscriptions (user_id, plan_id, status, start_date, end_date)
+                    VALUES (%s, %s, 'trial', NOW(), %s)
+                """, (user_id, plan_id, trial_end_date))
             
             conn.commit()
             flash('Registration successful! Enjoy your 14-day free trial. Please log in.')
             return redirect(url_for('login'))
-        except MySQLdb.IntegrityError:
+        except pymysql.IntegrityError:
             flash('Email already exists')
         finally:
             cursor.close()
@@ -345,12 +348,12 @@ def get_user_recipes():
     recipes = []
     for row in cursor.fetchall():
         recipes.append({
-            'id': row[0],
-            'name': row[1],
-            'ingredients': row[2],
-            'instructions': row[3],
-            'created_at': row[4].strftime('%Y-%m-%d %H:%M'),
-            'user_name': row[5]
+            'id': row['id'],
+            'name': row['recipe_name'],
+            'ingredients': row['ingredients'],
+            'instructions': row['instructions'],
+            'created_at': row['created_at'].strftime('%Y-%m-%d %H:%M'),
+            'user_name': row['user_name']
         })
     
     cursor.close()
@@ -388,12 +391,12 @@ def subscription():
     subscription_data = None
     if current_subscription:
         subscription_data = {
-            'status': current_subscription[0],
-            'start_date': current_subscription[1],
-            'end_date': current_subscription[2],
-            'plan_name': current_subscription[3],
-            'price': current_subscription[4],
-            'trial_end_date': current_subscription[5]
+            'status': current_subscription['status'],
+            'start_date': current_subscription['start_date'],
+            'end_date': current_subscription['end_date'],
+            'plan_name': current_subscription['name'],
+            'price': current_subscription['price'],
+            'trial_end_date': current_subscription['trial_end_date']
         }
     
     return render_template('subscription.html', 
@@ -401,14 +404,6 @@ def subscription():
                      subscription=subscription_data,
                      user_name=session.get('user_name'),
                      now=datetime.now())
-
-# Add this route to your app.py file
-
-# Replace your existing create_subscription route with this fixed version:
-
-# Replace your existing create_subscription route with this fixed version:
-
-# Replace your existing create_subscription route with this fixed version:
 
 @app.route('/create_subscription', methods=['POST'])
 def create_subscription():
@@ -435,7 +430,7 @@ def create_subscription():
             conn.close()
             return jsonify({'error': 'Plan not found'}), 404
         
-        plan_name, price, duration = plan
+        plan_name, price, duration = plan['name'], plan['price'], plan['duration_days']
         
         # Get user details
         cursor.execute("SELECT name, email FROM users WHERE id = %s", (session['user_id'],))
@@ -446,7 +441,7 @@ def create_subscription():
             conn.close()
             return jsonify({'error': 'User not found'}), 404
             
-        user_name, user_email = user
+        user_name, user_email = user['name'], user['email']
         cursor.close()
         conn.close()
         
@@ -606,7 +601,7 @@ def payment_callback():
             payment_record = cursor.fetchone()
             
             if payment_record:
-                user_id, plan_id, api_ref = payment_record
+                user_id, plan_id, api_ref = payment_record['user_id'], payment_record['plan_id'], payment_record['transaction_id']
                 print(f"Found pending payment: user_id={user_id}, plan_id={plan_id}")
                 
                 # Process the payment
@@ -649,9 +644,6 @@ def payment_callback():
     
     return redirect(url_for('subscription'))
 
-
-# 2. NEW PAYMENT PROCESSING FUNCTION
-
 def process_successful_payment(user_id, plan_id, amount, transaction_id, api_ref):
     """Process a successful payment and activate subscription"""
     try:
@@ -681,7 +673,7 @@ def process_successful_payment(user_id, plan_id, amount, transaction_id, api_ref
             conn.close()
             return False
         
-        duration_days, plan_name = plan
+        duration_days, plan_name = plan['duration_days'], plan['name']
         
         # Calculate dates
         start_date = datetime.now()
@@ -730,9 +722,6 @@ def process_successful_payment(user_id, plan_id, amount, transaction_id, api_ref
         import traceback
         traceback.print_exc()
         return False
-
-
-# 3. ALTERNATIVE: MANUAL PAYMENT VERIFICATION ROUTE
 
 @app.route('/verify_payment', methods=['POST'])
 def verify_payment():
@@ -820,15 +809,6 @@ def verify_payment():
             'message': 'Payment verification failed due to technical error.'
         }), 500
 
-
-
-# Update your webhook handler to be more robust
-# Replace your existing webhook handler with this improved version:
-
-# Replace your existing webhook handler with this improved version:
-
-# Replace your existing webhook handler with this improved version:
-
 @app.route("/intasend-webhook", methods=["POST"])
 def intasend_webhook():
     """Handle IntaSend webhook events with signature verification"""
@@ -873,7 +853,6 @@ def intasend_webhook():
         return "Invalid JSON", 400
     
     # Handle IntaSend payment completion
-    # IntaSend sends different event types, we need to check for successful payments
     if (data.get('state') == 'COMPLETE' or 
         data.get('status') == 'COMPLETE' or 
         data.get('status') == 'PAID'):
@@ -924,8 +903,8 @@ def intasend_webhook():
                     conn.close()
                     
                     if payment_record:
-                        user_id = payment_record[0]
-                        plan_id = payment_record[1]
+                        user_id = payment_record['user_id']
+                        plan_id = payment_record['plan_id']
                         print(f"Found user_id={user_id}, plan_id={plan_id} from payment record")
                     else:
                         print(f"No pending payment found for api_ref: {api_ref}")
@@ -958,7 +937,7 @@ def intasend_webhook():
                 if plan:
                     # Calculate subscription dates
                     start_date = datetime.now()
-                    end_date = start_date + timedelta(days=plan[0])
+                    end_date = start_date + timedelta(days=plan['duration_days'])
                     
                     # Deactivate any existing active subscriptions
                     cursor.execute("""
@@ -993,197 +972,129 @@ def intasend_webhook():
                     cursor.close()
                     conn.close()
                     
-                    print(f"✅ Successfully created subscription for user {user_id}, plan {plan_id}")
-                    print(f"Subscription active until: {end_date}")
-                    
-                    return "OK", 200
+                    print(f"Successfully processed webhook for user {user_id}, subscription {subscription_id}")
+                    return "Webhook processed successfully", 200
                 else:
                     print(f"Plan {plan_id} not found")
                     cursor.close()
                     conn.close()
                     return "Plan not found", 400
             else:
-                print("Missing required user_id or plan_id")
+                print("Missing user_id or plan_id")
                 return "Missing required data", 400
                 
         except Exception as e:
             print(f"Error processing webhook: {e}")
-            print(f"Traceback: {traceback.format_exc()}")
-            return "Error processing webhook", 500
-    else:
-        print(f"Webhook event ignored - status: {data.get('status')}, state: {data.get('state')}")
+            import traceback
+            traceback.print_exc()
+            return "Server error", 500
     
-    return "OK", 200
+    print(f"Webhook event not processed: {data.get('state') or data.get('status')}")
+    return "Event not processed", 200
 
-@app.route('/admin/trial')
-def admin_trial():
-    """Simple admin panel for managing trial periods - no authentication for testing"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT u.id, u.name, u.email, u.trial_end_date,
-               s.status, s.end_date as subscription_end
-        FROM users u
-        LEFT JOIN subscriptions s ON u.id = s.user_id
-        ORDER BY u.trial_end_date DESC
-    """)
-    users_data = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    
-    # Process users with consistent status calculation
-    users = []
-    for user in users_data:
-        user_dict = {
-            'id': user[0],
-            'name': user[1],
-            'email': user[2],
-            'trial_end_date': user[3],
-            'subscription_status': user[4],
-            'subscription_end': user[5]
-        }
-        
-        # Calculate trial status using the same logic as main app
-        trial_status = get_trial_status(user[3])
-        user_dict['trial_status'] = trial_status['status']
-        user_dict['days_left'] = trial_status['days_left']
-        user_dict['trial_message'] = trial_status['message']
-        
-        users.append(user_dict)
-    
-    return render_template('admin_trial.html', users=users, now=datetime.now())
-   
-
-@app.route('/admin/update_trial', methods=['POST'])
-def admin_update_trial():
-    """Update trial end date - no authentication for testing"""
-    user_id = request.form.get('user_id')
-    new_date = request.form.get('new_date')
-    action = request.form.get('action')
-    
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        if action == 'extend':
-            # Extend trial by specified days
-            days = int(request.form.get('days', 7))
-            cursor.execute(
-                "UPDATE users SET trial_end_date = DATE_ADD(COALESCE(trial_end_date, NOW()), INTERVAL %s DAY) WHERE id = %s",
-                (days, user_id)
-            )
-        elif action == 'set_date':
-            # Set specific date
-            cursor.execute(
-                "UPDATE users SET trial_end_date = %s WHERE id = %s",
-                (new_date, user_id)
-            )
-        elif action == 'end_now':
-            # End trial immediately
-            cursor.execute(
-                "UPDATE users SET trial_end_date = NOW() WHERE id = %s",
-                (user_id,)
-            )
-        
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        flash('Trial end date updated successfully')
-        return redirect(url_for('admin_trial'))
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/admin/add_days_all', methods=['POST'])
-def admin_add_days_all():
-    """Add days to all active trials - no authentication for testing"""
-    try:
-        days = int(request.form.get('days', 7))
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "UPDATE users SET trial_end_date = DATE_ADD(COALESCE(trial_end_date, NOW()), INTERVAL %s DAY) WHERE trial_end_date > NOW() OR trial_end_date IS NULL",
-            (days,)
-        )
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-        flash(f'Added {days} days to all active trials')
-        return redirect(url_for('admin_trial'))
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    
-@app.route('/payment_success')
-def payment_success():
+@app.route('/profile')
+def profile():
     if 'user_id' not in session:
         return redirect(url_for('login'))
     
-    flash('Payment successful! Your subscription is now active.')
-    return redirect(url_for('subscription'))
-# Add this test route to your app.py for debugging
-@app.route('/test_subscription', methods=['POST'])
-def test_subscription():
-    """Test route to debug subscription creation without IntaSend"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Get user details
+    cursor.execute("SELECT name, email, trial_end_date FROM users WHERE id = %s", (session['user_id'],))
+    user = cursor.fetchone()
+    
+    # Get subscription details
+    cursor.execute("""
+        SELECT s.status, s.start_date, s.end_date, sp.name as plan_name, sp.price
+        FROM subscriptions s
+        JOIN subscription_plans sp ON s.plan_id = sp.id
+        WHERE s.user_id = %s
+        ORDER BY s.created_at DESC
+        LIMIT 1
+    """, (session['user_id'],))
+    
+    subscription = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    
+    trial_status = get_trial_status(user['trial_end_date']) if user else None
+    
+    return render_template('profile.html', 
+                         user=user,
+                         subscription=subscription,
+                         trial_status=trial_status,
+                         user_name=session.get('user_name'))
+
+@app.route('/update_profile', methods=['POST'])
+def update_profile():
+    if 'user_id' not in session:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    data = request.get_json()
+    name = data.get('name')
+    email = data.get('email')
+    
+    if not name or not email:
+        return jsonify({'error': 'Name and email are required'}), 400
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("UPDATE users SET name = %s, email = %s WHERE id = %s", 
+                     (name, email, session['user_id']))
+        conn.commit()
+        
+        session['user_name'] = name
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify({'success': True, 'message': 'Profile updated successfully'})
+        
+    except pymysql.IntegrityError:
+        return jsonify({'error': 'Email already exists'}), 400
+    except Exception as e:
+        return jsonify({'error': 'Failed to update profile'}), 500
+
+@app.route('/delete_account', methods=['POST'])
+def delete_account():
     if 'user_id' not in session:
         return jsonify({'error': 'Not authenticated'}), 401
     
     try:
-        data = request.get_json()
-        print(f"Received data: {data}")
-        
-        plan_id = data.get('plan_id')
-        print(f"Plan ID: {plan_id}")
-        
-        if not plan_id:
-            return jsonify({'error': 'Plan ID required'}), 400
-        
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Get plan details
-        cursor.execute("SELECT name, price, duration_days FROM subscription_plans WHERE id = %s", (plan_id,))
-        plan = cursor.fetchone()
+        # Delete user data (in production, you might want to soft delete)
+        cursor.execute("DELETE FROM recipes WHERE user_id = %s", (session['user_id'],))
+        cursor.execute("DELETE FROM payments WHERE user_id = %s", (session['user_id'],))
+        cursor.execute("DELETE FROM subscriptions WHERE user_id = %s", (session['user_id'],))
+        cursor.execute("DELETE FROM users WHERE id = %s", (session['user_id'],))
         
-        if not plan:
-            cursor.close()
-            conn.close()
-            return jsonify({'error': 'Plan not found'}), 404
-        
-        plan_name, price, duration = plan
-        
-        # Get user details
-        cursor.execute("SELECT name, email FROM users WHERE id = %s", (session['user_id'],))
-        user = cursor.fetchone()
-        
-        if not user:
-            cursor.close()
-            conn.close()
-            return jsonify({'error': 'User not found'}), 404
-            
-        user_name, user_email = user
+        conn.commit()
         cursor.close()
         conn.close()
         
-        # Return test data instead of calling IntaSend
-        return jsonify({
-            'success': True,
-            'test': True,
-            'plan_name': plan_name,
-            'price': float(price),
-            'user_name': user_name,
-            'user_email': user_email,
-            'message': 'Test successful - IntaSend not called'
-        })
+        session.clear()
+        return jsonify({'success': True, 'message': 'Account deleted successfully'})
         
     except Exception as e:
-        print(f"Test route error: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': f'Test failed: {str(e)}'}), 500
+        return jsonify({'error': 'Failed to delete account'}), 500
+
+@app.route('/health')
+def health_check():
+    """Health check endpoint for monitoring"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.close()
+        conn.close()
+        return jsonify({'status': 'healthy', 'database': 'connected'})
+    except Exception as e:
+        return jsonify({'status': 'unhealthy', 'database': 'disconnected', 'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
