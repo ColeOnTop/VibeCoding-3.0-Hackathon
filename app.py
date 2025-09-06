@@ -13,6 +13,9 @@ import json
 import traceback  
 import psycopg2
 from psycopg2.extras import RealDictCursor
+import psycopg2
+def get_db_connection():
+    return psycopg2.connect(os.getenv('postgresql://plateful_user:F1yjPB1Ry4OvHFskWjd7nXVJQ24fZWwk@dpg-d2tva6vfte5s73akq6v0-a/plateful') )
 
 # Load environment variables
 load_dotenv()
